@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"go/format"
 	"io"
 	"io/ioutil"
 	"log"
@@ -74,8 +75,12 @@ func main() {
 	if err := suite.Execute(&buf, names); err != nil {
 		log.Fatal(err)
 	}
+	p, err := format.Source(buf.Bytes())
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	if err := ioutil.WriteFile(suiteFile, buf.Bytes(), 0755); err != nil {
+	if err := ioutil.WriteFile(suiteFile, p, 0755); err != nil {
 		log.Fatal(err)
 	}
 }
