@@ -54,7 +54,7 @@ func main() {
 		}
 
 		fname := filepath.Join(suiteDir, name)
-		if err := ioutil.WriteFile(fname, data, 0755); err != nil {
+		if err := ioutil.WriteFile(fname, data, 0644); err != nil {
 			return err
 		}
 
@@ -80,7 +80,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := ioutil.WriteFile(suiteFile, p, 0755); err != nil {
+	if err := ioutil.WriteFile(suiteFile, p, 0644); err != nil {
 		log.Fatal(err)
 	}
 }

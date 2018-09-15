@@ -67,7 +67,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := ioutil.WriteFile(fileName, p, 0755); err != nil {
+	if err := ioutil.WriteFile(fileName, p, 0644); err != nil {
 		log.Fatal(err)
 	}
 }
