@@ -11,6 +11,33 @@ import (
 	"time"
 )
 
+func TestParseHost(t *testing.T) {
+	tests := []struct {
+		host    string
+		service string
+		region  string
+	}{
+		{"", "", ""},
+		{"myhost.com", "", ""},
+		{"amazonaws.com", "", ""},
+		{"generic.eu-west-1.amazonaws.com", "generic", EUWest1},
+		{"eu-west-1.generic.amazonaws.com", "generic", EUWest1},
+		{"generic-eu-west-1.amazonaws.com", "generic", EUWest1},
+		{"s3.amazonaws.com", "s3", USEast1},
+		{"s3-external-1.amazonaws.com", "s3", USEast1},
+		{"some.bucket.s3.amazonaws.com", "s3", USEast1},
+	}
+	for _, test := range tests {
+		host := test.host
+		wantRegion := test.region
+		wantService := test.service
+		region, service := ParseHost(host)
+		if region != wantRegion || service != wantService {
+			t.Errorf("ParseHost(%q):\n got: %q %q\nwant: %q %q", host, region, service, wantRegion, wantService)
+		}
+	}
+}
+
 var skipSuite = map[string]struct{}{
 	// Go does not allow spaces in the request line.
 	"get-space": struct{}{},
