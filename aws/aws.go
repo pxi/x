@@ -106,26 +106,38 @@ func (c *Config) NewSession(region, service string) (*Session, error) {
 	return s, nil
 }
 
+var (
+	accessKeyEnvVars = []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_ACCESS_KEY",
+	}
+	secretKeyEnvVars = []string{
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SECRET_KEY",
+	}
+	sessionTokenEnvVars = []string{
+		"AWS_SESSION_TOKEN",
+	}
+)
+
 func (c *Config) credentials() (string, string, string) {
 	kid := c.kid
 	key := c.key
 	tok := c.tok
-	if kid == "" {
-		kid = os.Getenv("AWS_ACCESS_KEY_ID")
-		if kid == "" {
-			kid = os.Getenv("AWS_ACCESS_KEY")
-		}
-	}
-	if key == "" {
-		key = os.Getenv("AWS_SECRET_ACCESS_KEY")
-		if key == "" {
-			key = os.Getenv("AWS_SECRET_KEY")
-		}
-	}
-	if tok == "" {
-		tok = os.Getenv("AWS_SESSION_TOKEN")
-	}
+
+	maybeLoadFromEnv(&kid, accessKeyEnvVars)
+	maybeLoadFromEnv(&key, secretKeyEnvVars)
+	maybeLoadFromEnv(&tok, sessionTokenEnvVars)
+
 	return kid, key, tok
+}
+
+func maybeLoadFromEnv(s *string, vars []string) {
+	vs := *s
+	for i := 0; i < len(vars) && vs == ""; i++ {
+		vs = os.Getenv(vars[i])
+	}
+	*s = vs
 }
 
 // Session signs HTTP requests using AWS signature version 4.
