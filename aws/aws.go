@@ -347,6 +347,14 @@ func digestBody(req *http.Request) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// excludeHeaders tells which headers are excluded by canonicalHeaders.
+// Each key in the map must be in lower-case.
+var excludeHeaders = map[string]struct{}{
+	"authorization":   struct{}{},
+	"user-agent":      struct{}{},
+	"x-forwarded-for": struct{}{},
+}
+
 // canonicalHeaders returns the canonical and signed headers.
 func canonicalHeaders(req *http.Request) (string, string) {
 	host := req.Host
@@ -364,12 +372,14 @@ func canonicalHeaders(req *http.Request) (string, string) {
 	}
 
 	for k, vv := range req.Header {
+		k = strings.ToLower(k)
+		if _, ok := excludeHeaders[k]; ok {
+			continue
+		}
 		vv2 := make([]string, len(vv))
 		for i := range vv {
 			vv2[i] = trim(vv[i])
 		}
-
-		k = strings.ToLower(k)
 		c = append(c, k+":"+strings.Join(vv2, ","))
 		s = append(s, k)
 	}
