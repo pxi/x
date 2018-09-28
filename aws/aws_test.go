@@ -2,6 +2,7 @@ package aws
 
 import (
 	"bufio"
+	"context"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
@@ -56,6 +57,10 @@ var skipSuite = map[string]struct{}{
 
 //go:generate go run suite_test_gen.go
 func TestSessionSign(t *testing.T) {
+	now = func() time.Time {
+		return time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC)
+	}
+
 	const (
 		kid     = "AKIDEXAMPLE"
 		key     = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
@@ -63,14 +68,13 @@ func TestSessionSign(t *testing.T) {
 		service = "service"
 	)
 
-	now = func() time.Time {
-		return time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC)
+	opts := []Option{
+		WithRegion(region),
+		WithService(service),
+		WithCredentials(kid, key, ""),
 	}
 
-	s, err := Configure(
-		WithKeyID(kid),
-		WithSecretKey(key),
-	).NewSession(region, service)
+	s, err := NewSession(context.Background(), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

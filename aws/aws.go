@@ -2,6 +2,7 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,55 +13,63 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"sort"
 	"strings"
 	"time"
 )
 
-// Option is a function that sets an option in Config.
-type Option func(c *Config)
+// Option is a function that sets an option for Session.
+type Option func(*Session) error
 
-// Config is a collection of options for AWS access.
-type Config struct {
-	kid string
-	key string
-	tok string
+// Session is a collection of options for AWS access.
+type Session struct {
+	cred    credentials
+	region  string
+	service string
 }
 
-// Configure returns a new Config with the given options applied.
-func Configure(opts ...Option) *Config {
-	conf := new(Config)
-	conf.SetOptions(opts...)
-	return conf
-}
+// ErrNoCredentials means that no credentials were found by Session.
+var ErrNoCredentials = errors.New("aws: no credentials found")
 
-// SetOptions applies the given options to the Config.
-func (c *Config) SetOptions(opts ...Option) {
+// NewSession returns a new Session with the given options applied. If static
+// credentials are not provided, they are retrieved from environment.
+func NewSession(ctx context.Context, opts ...Option) (*Session, error) {
+	s := new(Session)
 	for _, opt := range opts {
-		opt(c)
+		if err := opt(s); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.cred.Init(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// WithCredentials sets the static credentials for the Session.
+func WithCredentials(kid, key, tok string) Option {
+	return func(s *Session) error {
+		s.cred.KeyID = kid
+		s.cred.SecretKey = key
+		s.cred.SessionToken = tok
+		return nil
 	}
 }
 
-// WithKeyID sets the access key ID for Config.
-func WithKeyID(s string) Option {
-	return func(c *Config) {
-		c.kid = s
+// WithRegion sets the signing region for the Session.
+func WithRegion(region string) Option {
+	return func(s *Session) error {
+		s.region = region
+		return nil
 	}
 }
 
-// WithSecretKey sets the secret access key for Config.
-func WithSecretKey(s string) Option {
-	return func(c *Config) {
-		c.key = s
-	}
-}
-
-// WithSessionToken sets the temporary session token for Config.
-func WithSessionToken(s string) Option {
-	return func(c *Config) {
-		c.tok = s
+// WithService sets the signing service for the Session.
+func WithService(service string) Option {
+	return func(s *Session) error {
+		s.service = service
+		return nil
 	}
 }
 
@@ -99,94 +108,6 @@ func parseHostPrefix(prefix string) (string, string) {
 	}
 	s := strings.Split(prefix, ".")
 	return USEast1, s[len(s)-1]
-}
-
-// ErrNoCredentials means that no credentials were found by Config.
-var ErrNoCredentials = errors.New("aws: no credentials found")
-
-const (
-	dateFormat = "20060102"
-
-	aws4        = "AWS4"
-	aws4Request = "aws4_request"
-)
-
-// now is a hook for tests to provide a different signing time.
-var now func() time.Time = time.Now
-
-// NewSession starts a new session for the given region and service.
-func (c *Config) NewSession(region, service string) (*Session, error) {
-	kid, key, tok := c.credentials()
-	if kid == "" || key == "" {
-		return nil, ErrNoCredentials
-	}
-
-	date := now().UTC().Format(dateFormat)
-	scope := []string{kid, date, region, service, aws4Request}
-
-	s := &Session{
-		token: tok,
-		scope: scope,
-	}
-
-	// Derive the signing key from secret key and scope.
-	hash := hmac.New(sha256.New, []byte(aws4+key))
-	for i := 1; i < len(scope); i++ {
-		hash.Write([]byte(scope[i]))
-		if i == len(scope)-1 {
-			hash.Sum(s.key[:0])
-			break
-		}
-		hash = hmac.New(sha256.New, hash.Sum(nil))
-	}
-
-	return s, nil
-}
-
-var (
-	accessKeyEnvVars = []string{
-		"AWS_ACCESS_KEY_ID",
-		"AWS_ACCESS_KEY",
-	}
-	secretKeyEnvVars = []string{
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_SECRET_KEY",
-	}
-	sessionTokenEnvVars = []string{
-		"AWS_SESSION_TOKEN",
-	}
-)
-
-func (c *Config) credentials() (string, string, string) {
-	kid := c.kid
-	key := c.key
-	tok := c.tok
-
-	maybeLoadFromEnv(&kid, accessKeyEnvVars)
-	maybeLoadFromEnv(&key, secretKeyEnvVars)
-	maybeLoadFromEnv(&tok, sessionTokenEnvVars)
-
-	return kid, key, tok
-}
-
-func maybeLoadFromEnv(s *string, vars []string) {
-	vs := *s
-	for i := 0; i < len(vars) && vs == ""; i++ {
-		vs = os.Getenv(vars[i])
-	}
-	*s = vs
-}
-
-// Session signs HTTP requests using AWS signature version 4.
-type Session struct {
-	// Expires is the time when the Session expires. Session does not
-	// update itself; it is up to the user to request a new Session when
-	// a Session is expired.
-	Expires time.Time
-
-	token string
-	scope []string
-	key   [sha256.Size]byte
 }
 
 const (
@@ -246,6 +167,11 @@ func (s *Session) Sign(req *http.Request) error {
 }
 
 func (s *Session) sign(req *http.Request) (string, string, error) {
+	scope, err := s.scope(req)
+	if err != nil {
+		return "", "", err
+	}
+
 	bodyDigest := req.Header.Get(PayloadHashHeader)
 	if bodyDigest == "" {
 		var err error
@@ -259,8 +185,8 @@ func (s *Session) sign(req *http.Request) (string, string, error) {
 		return "", "", err
 	}
 
-	if s.token != "" {
-		req.Header.Set(securityToken, s.token)
+	if s.cred.SessionToken != "" {
+		req.Header.Set(securityToken, s.cred.SessionToken)
 	}
 
 	canonHeaders, signedHeaders := canonicalHeaders(req)
@@ -291,19 +217,20 @@ func (s *Session) sign(req *http.Request) (string, string, error) {
 	buf.WriteByte('\n')
 	buf.WriteString(reqTime.Format(TimeFormat))
 	buf.WriteByte('\n')
-	buf.WriteString(strings.Join(s.scope[1:], "/"))
+	buf.WriteString(strings.Join(scope[1:], "/"))
 	buf.WriteByte('\n')
 	fmt.Fprintf(&buf, "%x", sum.Sum(nil))
 	sts := buf.String()
 
 	// Sign the string to sign.
-	sum = hmac.New(sha256.New, s.key[:])
+	key := scope.DeriveKey(s.cred.SecretKey)
+	sum = hmac.New(sha256.New, key[:])
 	sum.Write(buf.Bytes())
 	buf.Reset()
 
 	buf.WriteString("AWS4-HMAC-SHA256")
 	buf.WriteString(" Credential=")
-	buf.WriteString(strings.Join(s.scope, "/"))
+	buf.WriteString(strings.Join(scope[0:], "/"))
 	buf.WriteString(", SignedHeaders=")
 	buf.WriteString(signedHeaders)
 	buf.WriteString(", Signature=")
@@ -311,6 +238,58 @@ func (s *Session) sign(req *http.Request) (string, string, error) {
 	req.Header.Set("Authorization", buf.String())
 
 	return creq, sts, nil
+}
+
+type scope [5]string
+
+const (
+	dateFormat = "20060102"
+
+	aws4        = "AWS4"
+	aws4Request = "aws4_request"
+)
+
+// now is a hook for tests to provide a different signing time.
+var now func() time.Time = time.Now
+
+func (s *Session) scope(req *http.Request) (scope, error) {
+	region := s.region
+	service := s.service
+	if region == "" || service == "" {
+		parsedRegion, parsedService := ParseHost(req.Host)
+		if region == "" {
+			region = parsedRegion
+		}
+		if service == "" {
+			service = parsedService
+		}
+		if region == "" || service == "" {
+			return scope{}, fmt.Errorf("aws: unknown region or service")
+		}
+	}
+
+	var scope scope
+	scope[0] = s.cred.KeyID
+	scope[1] = now().UTC().Format(dateFormat)
+	scope[2] = region
+	scope[3] = service
+	scope[4] = aws4Request
+
+	return scope, nil
+}
+
+func (s scope) DeriveKey(secret string) (key [sha256.Size]byte) {
+	hash := hmac.New(sha256.New, []byte(aws4+secret))
+	for i := 1; i < len(s); i++ {
+		hash.Write([]byte(s[i]))
+		switch i {
+		case len(s) - 1:
+			hash.Sum(key[:0])
+		default:
+			hash = hmac.New(sha256.New, hash.Sum(nil))
+		}
+	}
+	return
 }
 
 func ensureDate(h http.Header) (time.Time, error) {
